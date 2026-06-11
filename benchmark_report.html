@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Email Phishing Classifier Benchmark</title>
+    <!-- Google Fonts: Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --card-bg: rgba(255, 255, 255, 0.04);
+            --card-border: rgba(255, 255, 255, 0.08);
+            --text-color: #f3f4f6;
+            --text-muted: #9ca3af;
+            --primary: #4f46e5;
+            --primary-glow: rgba(79, 70, 229, 0.4);
+            --secondary: #0ea5e9;
+            --accent: #10b981;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            padding: 2.5rem 1.5rem;
+            min-height: 100vh;
+            background-image: radial-gradient(circle at 10% 20%, rgba(79, 70, 229, 0.15) 0%, transparent 40%),
+                              radial-gradient(circle at 90% 80%, rgba(14, 165, 233, 0.15) 0%, transparent 40%);
+            background-attachment: fixed;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+
+        header h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            letter-spacing: -0.05em;
+            background: linear-gradient(135deg, #fff 0%, #a5b4fc 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
+
+        header p {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            font-weight: 400;
+        }
+
+        /* Grid System */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            backdrop-filter: blur(12px);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+            transition: transform 0.3s ease, border-color 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        .card-header {
+            font-size: 0.9rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin-bottom: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .card-value {
+            font-size: 2.2rem;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            color: #fff;
+            margin-bottom: 0.5rem;
+        }
+
+        .card-desc {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .chart-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        @media (max-width: 600px) {
+            .chart-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .chart-card {
+            min-height: 380px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .chart-card h2 {
+            font-size: 1.2rem;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+            color: #fff;
+            border-left: 4px solid var(--primary);
+            padding-left: 0.75rem;
+        }
+
+        .chart-container {
+            position: relative;
+            flex-grow: 1;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Table Card */
+        .table-card {
+            overflow-x: auto;
+            margin-bottom: 3rem;
+        }
+
+        .table-card h2 {
+            font-size: 1.2rem;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+            color: #fff;
+            border-left: 4px solid var(--secondary);
+            padding-left: 0.75rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        th, td {
+            padding: 1rem;
+            border-bottom: 1px solid var(--card-border);
+        }
+
+        th {
+            color: var(--text-muted);
+            font-weight: 600;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        td {
+            color: #fff;
+            font-size: 0.95rem;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        .highlight {
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .badge {
+            padding: 0.25rem 0.5rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .badge-indigo {
+            background: rgba(79, 70, 229, 0.2);
+            color: #a5b4fc;
+            border: 1px solid rgba(79, 70, 229, 0.4);
+        }
+        .badge-sky {
+            background: rgba(14, 165, 233, 0.2);
+            color: #7dd3fc;
+            border: 1px solid rgba(14, 165, 233, 0.4);
+        }
+        .badge-emerald {
+            background: rgba(16, 185, 129, 0.2);
+            color: #6ee7b7;
+            border: 1px solid rgba(16, 185, 129, 0.4);
+        }
+
+        .recommendation-card {
+            border-left: 4px solid var(--accent);
+            background: rgba(16, 185, 129, 0.05);
+        }
+
+        .recommendation-card h2 {
+            color: var(--accent);
+            font-size: 1.3rem;
+            font-weight: 700;
+            margin-bottom: 0.75rem;
+        }
+        
+        .recommendation-card p {
+            line-height: 1.6;
+            color: #e5e7eb;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Email Phishing Classifier</h1>
+            <p>Sustainable Performance & Compute Efficiency Dashboard</p>
+        </header>
+
+        <!-- Summary Cards -->
+        <div class="metrics-grid">
+            <div class="card">
+                <div class="card-header">
+                    <span>Top F1-Score</span>
+                    <span class="badge badge-sky">SVM Char</span>
+                </div>
+                <div class="card-value">0.9905</div>
+                <div class="card-desc">Highest overall classification accuracy on test dataset split.</div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <span>Fastest Latency</span>
+                    <span class="badge badge-emerald">HGB Numeric</span>
+                </div>
+                <div class="card-value">8.19 ms</div>
+                <div class="card-desc">Single email classification time in milliseconds.</div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <span>Highest Throughput</span>
+                    <span class="badge badge-emerald">HGB Numeric</span>
+                </div>
+                <div class="card-value">122 /s</div>
+                <div class="card-desc">Emails processed per second.</div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <span>Lowest CO2 Footprint</span>
+                    <span class="badge badge-indigo">LR Word</span>
+                </div>
+                <div class="card-value">4.6800 mg</div>
+                <div class="card-desc">CO2 equivalent emissions per benchmark run.</div>
+            </div>
+        </div>
+
+        <!-- Interactive Charts -->
+        <div class="chart-grid">
+            <div class="card chart-card">
+                <h2>Model Accuracy & F1-Scores</h2>
+                <div class="chart-container">
+                    <canvas id="accuracyChart"></canvas>
+                </div>
+            </div>
+            <div class="card chart-card">
+                <h2>Inference Latency & Disk Size Trade-off</h2>
+                <div class="chart-container">
+                    <canvas id="latencySizeChart"></canvas>
+                </div>
+            </div>
+            <div class="card chart-card">
+                <h2>Inference Throughput (emails/s)</h2>
+                <div class="chart-container">
+                    <canvas id="throughputChart"></canvas>
+                </div>
+            </div>
+            <div class="card chart-card">
+                <h2>Carbon Footprint (mg CO2eq)</h2>
+                <div class="chart-container">
+                    <canvas id="carbonChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Detailed Table -->
+        <div class="card table-card">
+            <h2>Detailed Evaluation & Benchmark Results</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Model Classifier</th>
+                        <th>Accuracy</th>
+                        <th>Precision</th>
+                        <th>Recall</th>
+                        <th>F1-Score</th>
+                        <th>ROC AUC</th>
+                        <th>Latency (ms)</th>
+                        <th>Throughput (/s)</th>
+                        <th>Size on Disk (MB)</th>
+                        <th>CO2 (mg)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="badge badge-indigo">LR Word</span></td>
+                        <td>0.9765</td>
+                        <td>0.9875</td>
+                        <td>0.9647</td>
+                        <td>0.9760</td>
+                        <td>0.9973</td>
+                        <td>1.38 ms</td>
+                        <td>725.2</td>
+                        <td>10.79 MB</td>
+                        <td class="highlight">4.6800 mg</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-sky">SVM Char</span></td>
+                        <td class="highlight">0.9907</td>
+                        <td>0.9963</td>
+                        <td>0.9848</td>
+                        <td class="highlight">0.9905</td>
+                        <td class="highlight">0.9995</td>
+                        <td>2.75 ms</td>
+                        <td>363.3</td>
+                        <td>8.63 MB</td>
+                        <td>10.3142 mg</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-emerald">HGB Numeric</span></td>
+                        <td>0.8141</td>
+                        <td>0.8384</td>
+                        <td>0.7731</td>
+                        <td>0.8044</td>
+                        <td>0.8952</td>
+                        <td class="highlight">8.19 ms</td>
+                        <td class="highlight">122.1</td>
+                        <td class="highlight">0.32 MB</td>
+                        <td>8.4840 mg</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Deployment Recommendation -->
+        <div class="card recommendation-card">
+            <h2>Deployment & Sustainability Recommendation</h2>
+            <p>
+                Based on the benchmark results, <strong>SVM Char (Character n-grams 3-5 LinearSVC)</strong> is highly recommended for applications prioritizing <strong>accuracy</strong>, reaching a top F1-Score of <strong>0.9905</strong>. However, it requires a larger model disk footprint (8.63 MB), has higher inference latency (2.75 ms), and incurs a carbon footprint of <strong>10.3142 mg CO2eq</strong> per benchmark evaluation.
+            </p>
+            <p style="margin-top: 0.5rem;">
+                If you are running in a resource-constrained environment (edge/mobile devices or high-concurrency low-latency webhooks) or prioritize <strong>environmental sustainability (Green AI)</strong>, <strong>HistGradientBoosting</strong> is the best alternative. It achieves a blazing fast <strong>8.19 ms</strong> single inference latency, <strong>122.1 classifications per second</strong>, a minimal model footprint of <strong>0.32 MB</strong>, and a carbon footprint of only <strong>8.4840 mg CO2eq</strong>.
+            </p>
+        </div>
+    </div>
+
+    <script>
+        const data = {
+  "lr_word": {
+    "metrics": {
+      "Accuracy": 0.9765342960288809,
+      "Precision": 0.987546699875467,
+      "Recall": 0.9647201946472019,
+      "F1": 0.976,
+      "ROC_AUC": 0.9972953597497394
+    },
+    "latency_ms": 1.3790044999950624,
+    "throughput_emails_per_sec": 725.1607953444536,
+    "model_size_mb": 10.785783767700195,
+    "emissions_mg": 4.680034008864583
+  },
+  "svm_char": {
+    "metrics": {
+      "Accuracy": 0.9906738868832732,
+      "Precision": 0.9963076923076923,
+      "Recall": 0.9847931873479319,
+      "F1": 0.9905169776690119,
+      "ROC_AUC": 0.9994815201019581
+    },
+    "latency_ms": 2.7526509999597693,
+    "throughput_emails_per_sec": 363.2861557874991,
+    "model_size_mb": 8.631157875061035,
+    "emissions_mg": 10.314218986893225
+  },
+  "hgb": {
+    "metrics": {
+      "Accuracy": 0.8140794223826715,
+      "Precision": 0.8383905013192612,
+      "Recall": 0.7731143552311436,
+      "F1": 0.8044303797468354,
+      "ROC_AUC": 0.8952009833738849
+    },
+    "latency_ms": 8.190497499977027,
+    "throughput_emails_per_sec": 122.09270560216943,
+    "model_size_mb": 0.315582275390625,
+    "emissions_mg": 8.48401830842913
+  }
+};
+        
+        // 1. Accuracy Chart
+        new Chart(document.getElementById('accuracyChart').getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: ['LR Word', 'SVM Char', 'HGB Numeric'],
+                datasets: [
+                    {
+                        label: 'F1-Score',
+                        data: [data.lr_word.metrics.F1, data.svm_char.metrics.F1, data.hgb.metrics.F1],
+                        backgroundColor: 'rgba(79, 70, 229, 0.8)',
+                        borderColor: '#4f46e5',
+                        borderWidth: 1
+                    },
+                    {
+                        label: 'Accuracy',
+                        data: [data.lr_word.metrics.Accuracy, data.svm_char.metrics.Accuracy, data.hgb.metrics.Accuracy],
+                        backgroundColor: 'rgba(14, 165, 233, 0.8)',
+                        borderColor: '#0ea5e9',
+                        borderWidth: 1
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 1.0,
+                        grid: { color: 'rgba(255, 255, 255, 0.08)' },
+                        ticks: { color: '#9ca3af' }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: '#9ca3af' }
+                    }
+                },
+                plugins: {
+                    legend: { labels: { color: '#f3f4f6' } }
+                }
+            }
+        });
+
+        // 2. Latency & Size Chart
+        new Chart(document.getElementById('latencySizeChart').getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: ['LR Word', 'SVM Char', 'HGB Numeric'],
+                datasets: [
+                    {
+                        label: 'Latency (ms) [lower is better]',
+                        data: [data.lr_word.latency_ms, data.svm_char.latency_ms, data.hgb.latency_ms],
+                        backgroundColor: 'rgba(239, 68, 68, 0.8)',
+                        borderColor: '#ef4444',
+                        borderWidth: 1,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Model Disk Size (MB) [lower is better]',
+                        data: [data.lr_word.model_size_mb, data.svm_char.model_size_mb, data.hgb.model_size_mb],
+                        backgroundColor: 'rgba(168, 85, 247, 0.8)',
+                        borderColor: '#a855f7',
+                        borderWidth: 1,
+                        yAxisID: 'y1'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        position: 'left',
+                        title: { display: true, text: 'Latency (ms)', color: '#ef4444' },
+                        grid: { color: 'rgba(255, 255, 255, 0.08)' },
+                        ticks: { color: '#9ca3af' }
+                    },
+                    y1: {
+                        beginAtZero: true,
+                        position: 'right',
+                        title: { display: true, text: 'Model Size (MB)', color: '#a855f7' },
+                        grid: { display: false },
+                        ticks: { color: '#9ca3af' }
+                    },
+                    x: {
+                        ticks: { color: '#9ca3af' }
+                    }
+                },
+                plugins: {
+                    legend: { labels: { color: '#f3f4f6' } }
+                }
+            }
+        });
+
+        // 3. Throughput Chart
+        new Chart(document.getElementById('throughputChart').getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: ['LR Word', 'SVM Char', 'HGB Numeric'],
+                datasets: [
+                    {
+                        label: 'Throughput (emails/s) [higher is better]',
+                        data: [data.lr_word.throughput_emails_per_sec, data.svm_char.throughput_emails_per_sec, data.hgb.throughput_emails_per_sec],
+                        backgroundColor: 'rgba(245, 158, 11, 0.8)',
+                        borderColor: '#f59e0b',
+                        borderWidth: 1
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(255, 255, 255, 0.08)' },
+                        ticks: { color: '#9ca3af' },
+                        title: { display: true, text: 'Emails / Second', color: '#f59e0b' }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: '#9ca3af' }
+                    }
+                },
+                plugins: {
+                    legend: { labels: { color: '#f3f4f6' } }
+                }
+            }
+        });
+
+        // 4. Carbon Footprint Chart
+        new Chart(document.getElementById('carbonChart').getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: ['LR Word', 'SVM Char', 'HGB Numeric'],
+                datasets: [
+                    {
+                        label: 'Carbon Footprint (mg CO2eq) [lower is better]',
+                        data: [data.lr_word.emissions_mg, data.svm_char.emissions_mg, data.hgb.emissions_mg],
+                        backgroundColor: 'rgba(16, 185, 129, 0.8)',
+                        borderColor: '#10b981',
+                        borderWidth: 1
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(255, 255, 255, 0.08)' },
+                        ticks: { color: '#9ca3af' },
+                        title: { display: true, text: 'Milligrams of CO2eq (mg)', color: '#10b981' }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: '#9ca3af' }
+                    }
+                },
+                plugins: {
+                    legend: { labels: { color: '#f3f4f6' } }
+                }
+            }
+        });
+    </script>
+</body>
+</html>
