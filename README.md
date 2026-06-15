@@ -63,6 +63,7 @@ sustainable_email_phishing_classifier/
 ---
 
 ## Installation & Setup
+0. Download Pretrained models and unzip in models folder (MobileBert, DistilBert, Electra) https://drive.google.com/file/d/1MRDJRp3j-2Y9Wpnrwax7QXHvI3Ed69NR/view?usp=sharing
 
 1. Make sure Python 3.10+ is installed.
 2. Install the dependencies:
