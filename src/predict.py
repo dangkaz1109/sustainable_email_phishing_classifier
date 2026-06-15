@@ -33,6 +33,20 @@ class EmailPredictor:
         hgb_path = os.path.join(MODELS_DIR, "hgb_model.joblib")
         if os.path.exists(hgb_path):
             self.models["hgb"] = joblib.load(hgb_path)
+            
+        # Transformers
+        transformer_mappings = {
+            "mobilebert": "google_mobilebert-uncased_model",
+            "distilbert": "distilbert-base-uncased_model",
+            "electra": "google_electra-base-discriminator_model"
+        }
+        for name, dir_name in transformer_mappings.items():
+            path = os.path.join(MODELS_DIR, dir_name)
+            if os.path.exists(path):
+                import torch
+                from transformers import AutoTokenizer, AutoModelForSequenceClassification
+                self.models[name] = AutoModelForSequenceClassification.from_pretrained(path)
+                self.vectorizers[name] = AutoTokenizer.from_pretrained(path)
 
     def is_model_available(self, model_type):
         return model_type in self.models
@@ -80,6 +94,23 @@ class EmailPredictor:
                 decision_score = model.decision_function(X)[0]
                 prob = 1 / (1 + np.exp(-decision_score))
                 
+        elif model_type in ["mobilebert", "distilbert", "electra"]:
+            import torch
+            tokenizer = self.vectorizers[model_type]
+            model = self.models[model_type]
+            model.eval()
+            
+            inputs = tokenizer(body, return_tensors="pt", truncation=True, padding=True, max_length=512)
+            # Move inputs to same device as model
+            device = next(model.parameters()).device
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            
+            with torch.no_grad():
+                outputs = model(**inputs)
+                logits = outputs.logits
+                pred = torch.argmax(logits, dim=-1).item()
+                prob = torch.nn.functional.softmax(logits, dim=-1)[0][1].item()
+                
         else:
             raise ValueError(f"Unknown model type: {model_type}")
             
@@ -89,3 +120,4 @@ class EmailPredictor:
             "label": int(pred),
             "model_used": model_type
         }
+

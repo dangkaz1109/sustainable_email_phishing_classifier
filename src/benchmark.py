@@ -17,12 +17,19 @@ logging.getLogger("codecarbon").disabled = True
 
 def get_file_size_mb(*paths):
     """
-    Returns the combined file size of target paths in Megabytes.
+    Returns the combined file size of target paths in Megabytes, supporting files and directories.
     """
     total_bytes = 0
     for p in paths:
         if os.path.exists(p):
-            total_bytes += os.path.getsize(p)
+            if os.path.isdir(p):
+                for root, _, files in os.walk(p):
+                    for f in files:
+                        fp = os.path.join(root, f)
+                        if os.path.exists(fp):
+                            total_bytes += os.path.getsize(fp)
+            else:
+                total_bytes += os.path.getsize(p)
     return total_bytes / (1024 * 1024)
 
 def run_benchmark(df, text_column):
@@ -31,10 +38,10 @@ def run_benchmark(df, text_column):
     """
     # 1. Check models presence
     predictor = EmailPredictor()
-    model_types = ["lr_word", "svm_char", "hgb"]
-    for mt in model_types:
-        if not predictor.is_model_available(mt):
-            raise FileNotFoundError(f"Model '{mt}' is not trained. Please run main.py first.")
+    model_types = ["lr_word", "svm_char", "hgb", "mobilebert", "distilbert", "electra"]
+    available_models = [mt for mt in model_types if predictor.is_model_available(mt)]
+    if not available_models:
+        raise FileNotFoundError("No trained models are available. Please run main.py first.")
             
     # 2. Split data
     _, test_df = split_data(df)
@@ -50,7 +57,7 @@ def run_benchmark(df, text_column):
     
     print("\nStarting performance benchmarking...")
     
-    for mt in model_types:
+    for mt in available_models:
         print(f"Benchmarking '{mt.upper()}'...")
         
         # Start CodeCarbon tracking for the benchmarking run of this model
@@ -58,8 +65,6 @@ def run_benchmark(df, text_column):
         tracker.start()
         
         try:
-            # A. Measure ML metrics on full test set
-            # For batch evaluation, we do it model by model
             preds = []
             probs = []
             
@@ -77,6 +82,29 @@ def run_benchmark(df, text_column):
                 else:  # svm_char
                     decision_scores = model.decision_function(X)
                     probs = 1 / (1 + np.exp(-decision_scores))
+            elif mt in ["mobilebert", "distilbert", "electra"]:
+                import torch
+                tokenizer = predictor.vectorizers[mt]
+                model.eval()
+                
+                texts = test_df_engineered[text_column].tolist()
+                device = next(model.parameters()).device
+                
+                batch_size = 32
+                for i in range(0, len(texts), batch_size):
+                    batch_texts = texts[i:i+batch_size]
+                    inputs = tokenizer(batch_texts, truncation=True, padding=True, max_length=512, return_tensors="pt")
+                    inputs = {k: v.to(device) for k, v in inputs.items()}
+                    with torch.no_grad():
+                        outputs = model(**inputs)
+                        logits = outputs.logits
+                        batch_preds = torch.argmax(logits, dim=-1).cpu().numpy()
+                        batch_probs = torch.nn.functional.softmax(logits, dim=-1)[:, 1].cpu().numpy()
+                        preds.extend(batch_preds)
+                        probs.extend(batch_probs)
+                
+                preds = np.array(preds)
+                probs = np.array(probs)
                     
             metrics = calculate_evaluation_metrics(y_true, preds, probs)
             
@@ -112,10 +140,17 @@ def run_benchmark(df, text_column):
                 os.path.join(MODELS_DIR, "svm_char_model.joblib"),
                 os.path.join(MODELS_DIR, "vectorizer_char.joblib")
             )
-        else: # hgb
+        elif mt == "hgb":
             size_mb = get_file_size_mb(
                 os.path.join(MODELS_DIR, "hgb_model.joblib")
             )
+        elif mt in ["mobilebert", "distilbert", "electra"]:
+            mapping = {
+                "mobilebert": "google_mobilebert-uncased_model",
+                "distilbert": "distilbert-base-uncased_model",
+                "electra": "google_electra-base-discriminator_model"
+            }
+            size_mb = get_file_size_mb(os.path.join(MODELS_DIR, mapping[mt]))
             
         results[mt] = {
             "metrics": metrics,
@@ -130,71 +165,65 @@ def run_benchmark(df, text_column):
 def generate_plots(results, output_path="performance_comparison.png"):
     """
     Generates a 3x2 grid of matplotlib bar charts comparing the models including energy/throughput metrics.
-    Each metric uses a consistent single color across models.
     """
-    models = [m.upper() for m in results.keys()]
+    model_name_map = {
+        "lr_word": "LR Word",
+        "svm_char": "SVM Char",
+        "hgb": "HGB Num",
+        "mobilebert": "MobileBERT",
+        "distilbert": "DistilBERT",
+        "electra": "Electra"
+    }
+    models = [model_name_map.get(m, m.upper()) for m in results.keys()]
+    keys = list(results.keys())
     
     # Extract values
-    f1_scores = [results[m.lower()]["metrics"]["F1"] for m in models]
-    roc_auc = [results[m.lower()]["metrics"]["ROC_AUC"] for m in models]
-    latencies = [results[m.lower()]["latency_ms"] for m in models]
-    throughputs = [results[m.lower()]["throughput_emails_per_sec"] for m in models]
-    sizes = [results[m.lower()]["model_size_mb"] for m in models]
-    emissions = [results[m.lower()]["emissions_mg"] for m in models]
+    f1_scores = [results[k]["metrics"]["F1"] for k in keys]
+    roc_auc = [results[k]["metrics"]["ROC_AUC"] for k in keys]
+    latencies = [results[k]["latency_ms"] for k in keys]
+    throughputs = [results[k]["throughput_emails_per_sec"] for k in keys]
+    sizes = [results[k]["model_size_mb"] for k in keys]
+    emissions = [results[k]["emissions_mg"] for k in keys]
     
-    fig, axs = plt.subplots(3, 2, figsize=(12, 14))
+    fig, axs = plt.subplots(3, 2, figsize=(14, 16))
     fig.suptitle("Phishing Classifier: Performance, Compute & Sustainability Benchmark", fontsize=16, fontweight="bold", y=0.97)
     
+    # Colors
+    colors = ["#4f46e5", "#8b5cf6", "#ef4444", "#f59e0b", "#0ea5e9", "#10b981"]
+    
+    # Helper to format bars
+    def plot_bar(ax, title, values, ylabel, color, format_str, lower_better=False):
+        bars = ax.bar(models, values, color=color, edgecolor="black", width=0.5)
+        ax.set_title(title, fontweight="bold")
+        if ylabel:
+            ax.set_ylabel(ylabel)
+        max_val = max(values) if values else 1.0
+        ax.set_ylim(0, max_val * 1.25 if max_val > 0 else 1.0)
+        # Highlight best model if needed
+        for bar, val in zip(bars, values):
+            ax.text(bar.get_x() + bar.get_width()/2.0, val + (max_val * 0.02 if max_val > 0 else 0.02), 
+                    f"{val:{format_str}}", ha="center", fontweight="bold", fontsize=9)
+            
     # 1. F1-Score (Indigo)
-    axs[0, 0].bar(models, f1_scores, color="#4f46e5", edgecolor="black", width=0.5)
-    axs[0, 0].set_title("F1-Score (Higher is Better)", fontweight="bold")
+    plot_bar(axs[0, 0], "F1-Score (Higher is Better)", f1_scores, None, "#4f46e5", ".4f")
     axs[0, 0].set_ylim(0, 1.05)
-    for i, v in enumerate(f1_scores):
-        axs[0, 0].text(i, v + 0.02, f"{v:.4f}", ha="center", fontweight="bold")
-        
+    
     # 2. ROC AUC (Purple)
-    axs[0, 1].bar(models, roc_auc, color="#8b5cf6", edgecolor="black", width=0.5)
-    axs[0, 1].set_title("ROC AUC (Higher is Better)", fontweight="bold")
+    plot_bar(axs[0, 1], "ROC AUC (Higher is Better)", roc_auc, None, "#8b5cf6", ".4f")
     axs[0, 1].set_ylim(0, 1.05)
-    for i, v in enumerate(roc_auc):
-        axs[0, 1].text(i, v + 0.02, f"{v:.4f}", ha="center", fontweight="bold")
-        
+    
     # 3. Latency (Red)
-    axs[1, 0].bar(models, latencies, color="#ef4444", edgecolor="black", width=0.5)
-    axs[1, 0].set_title("Single Inference Latency (ms) (Lower is Better)", fontweight="bold")
-    axs[1, 0].set_ylabel("Milliseconds (ms)")
-    max_lat = max(latencies)
-    axs[1, 0].set_ylim(0, max_lat * 1.25)
-    for i, v in enumerate(latencies):
-        axs[1, 0].text(i, v + (max_lat * 0.02), f"{v:.2f} ms", ha="center", fontweight="bold")
-        
+    plot_bar(axs[1, 0], "Single Inference Latency (ms) (Lower is Better)", latencies, "Milliseconds (ms)", "#ef4444", ".2f")
+    
     # 4. Throughput (Amber)
-    axs[1, 1].bar(models, throughputs, color="#f59e0b", edgecolor="black", width=0.5)
-    axs[1, 1].set_title("Throughput (emails/s) (Higher is Better)", fontweight="bold")
-    axs[1, 1].set_ylabel("Emails per Second")
-    max_tput = max(throughputs)
-    axs[1, 1].set_ylim(0, max_tput * 1.25)
-    for i, v in enumerate(throughputs):
-        axs[1, 1].text(i, v + (max_tput * 0.02), f"{v:.1f}/s", ha="center", fontweight="bold")
-        
+    plot_bar(axs[1, 1], "Throughput (emails/s) (Higher is Better)", throughputs, "Emails per Second", "#f59e0b", ".1f")
+    
     # 5. Model Size (Sky Blue)
-    axs[2, 0].bar(models, sizes, color="#0ea5e9", edgecolor="black", width=0.5)
-    axs[2, 0].set_title("Model Footprint on Disk (MB) (Lower is Better)", fontweight="bold")
-    axs[2, 0].set_ylabel("Megabytes (MB)")
-    max_size = max(sizes)
-    axs[2, 0].set_ylim(0, max_size * 1.25)
-    for i, v in enumerate(sizes):
-        axs[2, 0].text(i, v + (max_size * 0.02), f"{v:.2f} MB", ha="center", fontweight="bold")
-        
-    # 6. Carbon Footprint (Green - Required)
-    axs[2, 1].bar(models, emissions, color="#10b981", edgecolor="black", width=0.5)
-    axs[2, 1].set_title("Carbon Footprint (mg CO2eq) (Lower is Better)", fontweight="bold")
-    axs[2, 1].set_ylabel("Milligrams of CO2eq (mg)")
-    max_em = max(emissions)
-    axs[2, 1].set_ylim(0, max_em * 1.25 if max_em > 0 else 1.0)
-    for i, v in enumerate(emissions):
-        axs[2, 1].text(i, v + (max_em * 0.02 if max_em > 0 else 0.02), f"{v:.4f} mg", ha="center", fontweight="bold")
-        
+    plot_bar(axs[2, 0], "Model Footprint on Disk (MB) (Lower is Better)", sizes, "Megabytes (MB)", "#0ea5e9", ".2f")
+    
+    # 6. Carbon Footprint (Green)
+    plot_bar(axs[2, 1], "Carbon Footprint (mg CO2eq) (Lower is Better)", emissions, "Milligrams of CO2eq (mg)", "#10b981", ".4f")
+    
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.savefig(output_path, dpi=300)
     plt.close()
@@ -206,22 +235,92 @@ def generate_html_report(results, output_path="benchmark_report.html"):
     """
     json_data = json.dumps(results, indent=2)
     
-    # Find model with lowest carbon footprint
+    model_name_map = {
+        "lr_word": "LR Word",
+        "svm_char": "SVM Char",
+        "hgb": "HGB Numeric",
+        "mobilebert": "MobileBERT",
+        "distilbert": "DistilBERT",
+        "electra": "Electra"
+    }
+    model_badge_map = {
+        "lr_word": "badge-indigo",
+        "svm_char": "badge-sky",
+        "hgb": "badge-emerald",
+        "mobilebert": "badge-indigo",
+        "distilbert": "badge-sky",
+        "electra": "badge-emerald"
+    }
+    
+    # Find model stats dynamically
     lowest_co2_model = min(results.keys(), key=lambda k: results[k].get("emissions_mg", 0.0))
     lowest_co2_val = results[lowest_co2_model].get("emissions_mg", 0.0)
-    lowest_co2_name = {"lr_word": "LR Word", "svm_char": "SVM Char", "hgb": "HGB Numeric"}[lowest_co2_model]
-    lowest_co2_badge = {"lr_word": "badge-indigo", "svm_char": "badge-sky", "hgb": "badge-emerald"}[lowest_co2_model]
+    lowest_co2_name = model_name_map.get(lowest_co2_model, lowest_co2_model.upper())
+    lowest_co2_badge = model_badge_map.get(lowest_co2_model, "badge-indigo")
     
-    lr_co2 = results["lr_word"].get("emissions_mg", 0.0)
-    svm_co2 = results["svm_char"].get("emissions_mg", 0.0)
-    hgb_co2 = results["hgb"].get("emissions_mg", 0.0)
-    co2_values = [lr_co2, svm_co2, hgb_co2]
-    min_co2 = min(co2_values)
+    top_f1_model = max(results.keys(), key=lambda k: results[k]["metrics"]["F1"])
+    top_f1_val = results[top_f1_model]["metrics"]["F1"]
+    top_f1_name = model_name_map.get(top_f1_model, top_f1_model.upper())
+    top_f1_badge = model_badge_map.get(top_f1_model, "badge-sky")
+
+    fastest_lat_model = min(results.keys(), key=lambda k: results[k]["latency_ms"])
+    fastest_lat_val = results[fastest_lat_model]["latency_ms"]
+    fastest_lat_name = model_name_map.get(fastest_lat_model, fastest_lat_model.upper())
+    fastest_lat_badge = model_badge_map.get(fastest_lat_model, "badge-emerald")
+
+    max_tput_model = max(results.keys(), key=lambda k: results[k]["throughput_emails_per_sec"])
+    max_tput_val = results[max_tput_model]["throughput_emails_per_sec"]
+    max_tput_name = model_name_map.get(max_tput_model, max_tput_model.upper())
+    max_tput_badge = model_badge_map.get(max_tput_model, "badge-emerald")
+
+    # Dynamic table rows generation
+    min_co2 = min(results[m].get("emissions_mg", 0.0) for m in results)
+    max_acc = max(results[m]["metrics"]["Accuracy"] for m in results)
+    max_f1 = max(results[m]["metrics"]["F1"] for m in results)
+    max_roc = max(results[m]["metrics"]["ROC_AUC"] for m in results)
+    min_lat = min(results[m]["latency_ms"] for m in results)
+    max_tput = max(results[m]["throughput_emails_per_sec"] for m in results)
+    min_size = min(results[m]["model_size_mb"] for m in results)
+
+    table_rows = []
+    for mt, res in results.items():
+        name = model_name_map.get(mt, mt.upper())
+        badge = model_badge_map.get(mt, "badge-indigo")
+        
+        acc_val = res["metrics"]["Accuracy"]
+        prec_val = res["metrics"]["Precision"]
+        rec_val = res["metrics"]["Recall"]
+        f1_val = res["metrics"]["F1"]
+        roc_val = res["metrics"]["ROC_AUC"]
+        lat_val = res["latency_ms"]
+        tput_val = res["throughput_emails_per_sec"]
+        size_val = res["model_size_mb"]
+        co2_val = res.get("emissions_mg", 0.0)
+        
+        co2_hl = ' class="highlight"' if co2_val == min_co2 else ''
+        acc_hl = ' class="highlight"' if acc_val == max_acc else ''
+        f1_hl = ' class="highlight"' if f1_val == max_f1 else ''
+        roc_hl = ' class="highlight"' if roc_val == max_roc else ''
+        lat_hl = ' class="highlight"' if lat_val == min_lat else ''
+        tput_hl = ' class="highlight"' if tput_val == max_tput else ''
+        size_hl = ' class="highlight"' if size_val == min_size else ''
+        
+        row_html = f"""                    <tr>
+                        <td><span class="badge {badge}">{name}</span></td>
+                        <td{acc_hl}>{acc_val:.4f}</td>
+                        <td>{prec_val:.4f}</td>
+                        <td>{rec_val:.4f}</td>
+                        <td{f1_hl}>{f1_val:.4f}</td>
+                        <td{roc_hl}>{roc_val:.4f}</td>
+                        <td{lat_hl}>{lat_val:.2f} ms</td>
+                        <td{tput_hl}>{tput_val:.1f}</td>
+                        <td{size_hl}>{size_val:.2f} MB</td>
+                        <td{co2_hl}>{co2_val:.4f} mg</td>
+                    </tr>"""
+        table_rows.append(row_html)
     
-    lr_co2_hl = ' class="highlight"' if lr_co2 == min_co2 else ''
-    svm_co2_hl = ' class="highlight"' if svm_co2 == min_co2 else ''
-    hgb_co2_hl = ' class="highlight"' if hgb_co2 == min_co2 else ''
-    
+    table_body_content = "\n".join(table_rows)
+
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -473,25 +572,25 @@ def generate_html_report(results, output_path="benchmark_report.html"):
             <div class="card">
                 <div class="card-header">
                     <span>Top F1-Score</span>
-                    <span class="badge badge-sky">SVM Char</span>
+                    <span class="badge {top_f1_badge}">{top_f1_name}</span>
                 </div>
-                <div class="card-value">{results["svm_char"]["metrics"]["F1"]:.4f}</div>
+                <div class="card-value">{top_f1_val:.4f}</div>
                 <div class="card-desc">Highest overall classification accuracy on test dataset split.</div>
             </div>
             <div class="card">
                 <div class="card-header">
                     <span>Fastest Latency</span>
-                    <span class="badge badge-emerald">HGB Numeric</span>
+                    <span class="badge {fastest_lat_badge}">{fastest_lat_name}</span>
                 </div>
-                <div class="card-value">{results["hgb"]["latency_ms"]:.2f} ms</div>
+                <div class="card-value">{fastest_lat_val:.2f} ms</div>
                 <div class="card-desc">Single email classification time in milliseconds.</div>
             </div>
             <div class="card">
                 <div class="card-header">
                     <span>Highest Throughput</span>
-                    <span class="badge badge-emerald">HGB Numeric</span>
+                    <span class="badge {max_tput_badge}">{max_tput_name}</span>
                 </div>
-                <div class="card-value">{int(results["hgb"]["throughput_emails_per_sec"])} /s</div>
+                <div class="card-value">{int(max_tput_val)} /s</div>
                 <div class="card-desc">Emails processed per second.</div>
             </div>
             <div class="card">
@@ -551,42 +650,7 @@ def generate_html_report(results, output_path="benchmark_report.html"):
                     </tr>
                 </thead>
                 <tbody>
-                    <tr>
-                        <td><span class="badge badge-indigo">LR Word</span></td>
-                        <td>{results["lr_word"]["metrics"]["Accuracy"]:.4f}</td>
-                        <td>{results["lr_word"]["metrics"]["Precision"]:.4f}</td>
-                        <td>{results["lr_word"]["metrics"]["Recall"]:.4f}</td>
-                        <td>{results["lr_word"]["metrics"]["F1"]:.4f}</td>
-                        <td>{results["lr_word"]["metrics"]["ROC_AUC"]:.4f}</td>
-                        <td>{results["lr_word"]["latency_ms"]:.2f} ms</td>
-                        <td>{results["lr_word"]["throughput_emails_per_sec"]:.1f}</td>
-                        <td>{results["lr_word"]["model_size_mb"]:.2f} MB</td>
-                        <td{lr_co2_hl}>{results["lr_word"].get("emissions_mg", 0.0):.4f} mg</td>
-                    </tr>
-                    <tr>
-                        <td><span class="badge badge-sky">SVM Char</span></td>
-                        <td class="highlight">{results["svm_char"]["metrics"]["Accuracy"]:.4f}</td>
-                        <td>{results["svm_char"]["metrics"]["Precision"]:.4f}</td>
-                        <td>{results["svm_char"]["metrics"]["Recall"]:.4f}</td>
-                        <td class="highlight">{results["svm_char"]["metrics"]["F1"]:.4f}</td>
-                        <td class="highlight">{results["svm_char"]["metrics"]["ROC_AUC"]:.4f}</td>
-                        <td>{results["svm_char"]["latency_ms"]:.2f} ms</td>
-                        <td>{results["svm_char"]["throughput_emails_per_sec"]:.1f}</td>
-                        <td>{results["svm_char"]["model_size_mb"]:.2f} MB</td>
-                        <td{svm_co2_hl}>{results["svm_char"].get("emissions_mg", 0.0):.4f} mg</td>
-                    </tr>
-                    <tr>
-                        <td><span class="badge badge-emerald">HGB Numeric</span></td>
-                        <td>{results["hgb"]["metrics"]["Accuracy"]:.4f}</td>
-                        <td>{results["hgb"]["metrics"]["Precision"]:.4f}</td>
-                        <td>{results["hgb"]["metrics"]["Recall"]:.4f}</td>
-                        <td>{results["hgb"]["metrics"]["F1"]:.4f}</td>
-                        <td>{results["hgb"]["metrics"]["ROC_AUC"]:.4f}</td>
-                        <td class="highlight">{results["hgb"]["latency_ms"]:.2f} ms</td>
-                        <td class="highlight">{results["hgb"]["throughput_emails_per_sec"]:.1f}</td>
-                        <td class="highlight">{results["hgb"]["model_size_mb"]:.2f} MB</td>
-                        <td{hgb_co2_hl}>{results["hgb"].get("emissions_mg", 0.0):.4f} mg</td>
-                    </tr>
+{table_body_content}
                 </tbody>
             </table>
         </div>
@@ -595,33 +659,42 @@ def generate_html_report(results, output_path="benchmark_report.html"):
         <div class="card recommendation-card">
             <h2>Deployment & Sustainability Recommendation</h2>
             <p>
-                Based on the benchmark results, <strong>SVM Char (Character n-grams 3-5 LinearSVC)</strong> is highly recommended for applications prioritizing <strong>accuracy</strong>, reaching a top F1-Score of <strong>{results["svm_char"]["metrics"]["F1"]:.4f}</strong>. However, it requires a larger model disk footprint ({results["svm_char"]["model_size_mb"]:.2f} MB), has higher inference latency ({results["svm_char"]["latency_ms"]:.2f} ms), and incurs a carbon footprint of <strong>{results["svm_char"]["emissions_mg"]:.4f} mg CO2eq</strong> per benchmark evaluation.
+                Based on the benchmark results, <strong>{top_f1_name}</strong> is highly recommended for applications prioritizing <strong>accuracy</strong>, reaching a top F1-Score of <strong>{top_f1_val:.4f}</strong>. However, it requires a model disk footprint of <strong>{results[top_f1_model]["model_size_mb"]:.2f} MB</strong>, has single inference latency of <strong>{results[top_f1_model]["latency_ms"]:.2f} ms</strong>, and incurs a carbon footprint of <strong>{results[top_f1_model]["emissions_mg"]:.4f} mg CO2eq</strong> per benchmark evaluation.
             </p>
             <p style="margin-top: 0.5rem;">
-                If you are running in a resource-constrained environment (edge/mobile devices or high-concurrency low-latency webhooks) or prioritize <strong>environmental sustainability (Green AI)</strong>, <strong>HistGradientBoosting</strong> is the best alternative. It achieves a blazing fast <strong>{results["hgb"]["latency_ms"]:.2f} ms</strong> single inference latency, <strong>{results["hgb"]["throughput_emails_per_sec"]:.1f} classifications per second</strong>, a minimal model footprint of <strong>{results["hgb"]["model_size_mb"]:.2f} MB</strong>, and a carbon footprint of only <strong>{results["hgb"]["emissions_mg"]:.4f} mg CO2eq</strong>.
+                If you are running in a resource-constrained environment (edge/mobile devices or high-concurrency low-latency webhooks) or prioritize <strong>environmental sustainability (Green AI)</strong>, <strong>{fastest_lat_name}</strong> is the best alternative. It achieves a blazing fast <strong>{fastest_lat_val:.2f} ms</strong> single inference latency, <strong>{results[fastest_lat_model]["throughput_emails_per_sec"]:.1f} classifications per second</strong>, a minimal model footprint of <strong>{results[fastest_lat_model]["model_size_mb"]:.2f} MB</strong>, and a carbon footprint of only <strong>{results[fastest_lat_model]["emissions_mg"]:.4f} mg CO2eq</strong>.
             </p>
         </div>
     </div>
 
     <script>
         const data = {json_data};
+        const modelNames = {{
+            lr_word: 'LR Word',
+            svm_char: 'SVM Char',
+            hgb: 'HGB Numeric',
+            mobilebert: 'MobileBERT',
+            distilbert: 'DistilBERT',
+            electra: 'Electra'
+        }};
+        const labels = Object.keys(data).map(k => modelNames[k] || k.toUpperCase());
         
         // 1. Accuracy Chart
         new Chart(document.getElementById('accuracyChart').getContext('2d'), {{
             type: 'bar',
             data: {{
-                labels: ['LR Word', 'SVM Char', 'HGB Numeric'],
+                labels: labels,
                 datasets: [
                     {{
                         label: 'F1-Score',
-                        data: [data.lr_word.metrics.F1, data.svm_char.metrics.F1, data.hgb.metrics.F1],
+                        data: Object.keys(data).map(k => data[k].metrics.F1),
                         backgroundColor: 'rgba(79, 70, 229, 0.8)',
                         borderColor: '#4f46e5',
                         borderWidth: 1
                     }},
                     {{
                         label: 'Accuracy',
-                        data: [data.lr_word.metrics.Accuracy, data.svm_char.metrics.Accuracy, data.hgb.metrics.Accuracy],
+                        data: Object.keys(data).map(k => data[k].metrics.Accuracy),
                         backgroundColor: 'rgba(14, 165, 233, 0.8)',
                         borderColor: '#0ea5e9',
                         borderWidth: 1
@@ -653,11 +726,11 @@ def generate_html_report(results, output_path="benchmark_report.html"):
         new Chart(document.getElementById('latencySizeChart').getContext('2d'), {{
             type: 'bar',
             data: {{
-                labels: ['LR Word', 'SVM Char', 'HGB Numeric'],
+                labels: labels,
                 datasets: [
                     {{
                         label: 'Latency (ms) [lower is better]',
-                        data: [data.lr_word.latency_ms, data.svm_char.latency_ms, data.hgb.latency_ms],
+                        data: Object.keys(data).map(k => data[k].latency_ms),
                         backgroundColor: 'rgba(239, 68, 68, 0.8)',
                         borderColor: '#ef4444',
                         borderWidth: 1,
@@ -665,7 +738,7 @@ def generate_html_report(results, output_path="benchmark_report.html"):
                     }},
                     {{
                         label: 'Model Disk Size (MB) [lower is better]',
-                        data: [data.lr_word.model_size_mb, data.svm_char.model_size_mb, data.hgb.model_size_mb],
+                        data: Object.keys(data).map(k => data[k].model_size_mb),
                         backgroundColor: 'rgba(168, 85, 247, 0.8)',
                         borderColor: '#a855f7',
                         borderWidth: 1,
@@ -705,11 +778,11 @@ def generate_html_report(results, output_path="benchmark_report.html"):
         new Chart(document.getElementById('throughputChart').getContext('2d'), {{
             type: 'bar',
             data: {{
-                labels: ['LR Word', 'SVM Char', 'HGB Numeric'],
+                labels: labels,
                 datasets: [
                     {{
                         label: 'Throughput (emails/s) [higher is better]',
-                        data: [data.lr_word.throughput_emails_per_sec, data.svm_char.throughput_emails_per_sec, data.hgb.throughput_emails_per_sec],
+                        data: Object.keys(data).map(k => data[k].throughput_emails_per_sec),
                         backgroundColor: 'rgba(245, 158, 11, 0.8)',
                         borderColor: '#f59e0b',
                         borderWidth: 1
@@ -741,11 +814,11 @@ def generate_html_report(results, output_path="benchmark_report.html"):
         new Chart(document.getElementById('carbonChart').getContext('2d'), {{
             type: 'bar',
             data: {{
-                labels: ['LR Word', 'SVM Char', 'HGB Numeric'],
+                labels: labels,
                 datasets: [
                     {{
                         label: 'Carbon Footprint (mg CO2eq) [lower is better]',
-                        data: [data.lr_word.emissions_mg, data.svm_char.emissions_mg, data.hgb.emissions_mg],
+                        data: Object.keys(data).map(k => data[k].emissions_mg),
                         backgroundColor: 'rgba(16, 185, 129, 0.8)',
                         borderColor: '#10b981',
                         borderWidth: 1

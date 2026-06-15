@@ -1,0 +1,10 @@
+# Ignore trained models directory
+models/
+
+# Ignore Hugging Face trainer checkpoints
+results/
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+

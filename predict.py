@@ -20,7 +20,7 @@ def main():
         "--model", 
         type=str, 
         default="svm_char", 
-        choices=["lr_word", "svm_char", "hgb"],
+        choices=["lr_word", "svm_char", "hgb", "mobilebert", "distilbert", "electra"],
         help="The classification model to use (default: svm_char)."
     )
     

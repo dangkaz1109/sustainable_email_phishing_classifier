@@ -2,7 +2,7 @@ import sys
 from src.config import DATA_PATH, NUMERIC_FEATURES
 from src.data_loader import load_data, split_data
 from src.features import get_primary_text_column, engineer_numeric_features
-from src.train import train_lr_word, train_svm_char, train_hgb_numeric
+from src.train import train_lr_word, train_svm_char, train_hgb_numeric, train_transformer
 
 def main():
     try:
@@ -24,6 +24,9 @@ def main():
         metrics_lr_word = train_lr_word(train_df, test_df, text_column)
         metrics_svm_char = train_svm_char(train_df, test_df, text_column)
         metrics_hgb = train_hgb_numeric(train_df, test_df, NUMERIC_FEATURES)
+        metrics_mobilebert = train_transformer(train_df, test_df, text_column, "google/mobilebert-uncased")
+        metrics_distilbert = train_transformer(train_df, test_df, text_column, "distilbert-base-uncased")
+        metrics_electra = train_transformer(train_df, test_df, text_column, "google/electra-base-discriminator")
         
         # 6. Output Comparison
         print(f"\n{'='*60}\nEVALUATION RESULTS\n{'='*60}")
@@ -39,6 +42,18 @@ def main():
         print("[NUMERIC - HistGradientBoosting]")
         print(" | ".join([f"{k}: {v:.4f}" for k, v in metrics_hgb.items()]))
         print("-" * 60)
+
+        print("[BODY - MobileBERT]")
+        print(" | ".join([f"{k.replace('eval_', '')}: {v:.4f}" for k, v in metrics_mobilebert.items() if k.replace('eval_', '') in ["Accuracy", "Precision", "Recall", "F1", "ROC_AUC"]]))
+        print("-" * 60)
+
+        print("[BODY - DistilBERT]")
+        print(" | ".join([f"{k.replace('eval_', '')}: {v:.4f}" for k, v in metrics_distilbert.items() if k.replace('eval_', '') in ["Accuracy", "Precision", "Recall", "F1", "ROC_AUC"]]))
+        print("-" * 60)
+
+        print("[BODY - Electra]")
+        print(" | ".join([f"{k.replace('eval_', '')}: {v:.4f}" for k, v in metrics_electra.items() if k.replace('eval_', '') in ["Accuracy", "Precision", "Recall", "F1", "ROC_AUC"]]))
+        print("-" * 60)
         
     except Exception as e:
         print(f"\n[ERROR] Pipeline failed: {str(e)}", file=sys.stderr)
@@ -46,3 +61,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -25,3 +25,8 @@ NUMERIC_FEATURES = [
     "body_url_count",
     "body_special_char_count"
 ]
+
+TRANSFORMER_BATCH_SIZE = 16
+TRANSFORMER_EPOCHS = 3
+TRANSFORMER_LR = 2e-5
+
